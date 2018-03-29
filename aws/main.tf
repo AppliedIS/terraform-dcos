@@ -4,90 +4,54 @@ provider "aws" {
   region = "${var.aws_region}"
 }
 
+#requires that terraform init be called to get started with s3 backend
+# A file called s3-backend should be created with the following contents:
+# bucket    = "my-bucket-name"
+# key       = "cluster-name/terraform.tfstate"
+# endpoint  = "https://s3"
+
+
+# terraform init -backend-config-s3-backend
+terraform {
+  backend "s3" {
+    region = "us-east-1"
+  }
+}
+
+
 # Runs a local script to return the current user in bash
 data "external" "whoami" {
   program = ["scripts/local/whoami.sh"]
 }
 
-# Create a VPC to launch our instances into
-resource "aws_vpc" "default" {
-  cidr_block = "10.0.0.0/16"
-  enable_dns_hostnames = "true"
-
-tags {
-   Name = "${coalesce(var.owner, data.external.whoami.result["owner"])}"
-  }
-}
-
-# Addressable Cluster UUID
-data "template_file" "cluster_uuid" {
- template = "tf$${uuid}"
-
- vars {
-    uuid = "${substr(md5(aws_vpc.default.id),0,4)}"
-  }
-}
-
-# Allow overrides of the owner variable or default to whoami.sh
-data "template_file" "cluster-name" {
- template = "$${username}-tf$${uuid}"
-
-  vars {
-    uuid = "${substr(md5(aws_vpc.default.id),0,4)}"
-    username = "${format("%.10s", coalesce(var.owner, data.external.whoami.result["owner"]))}"
-  }
-}
+# we are not going to use a custom VPC / route / IGW or subnet, but launch into an existing one. it is assumed
+# that this one has external connectivity and public IPs are assigned. 
 
 # Create DCOS Bucket regardless of what exhibitor backend was chosen
 resource "aws_s3_bucket" "dcos_bucket" {
-  bucket = "${data.template_file.cluster-name.rendered}-bucket"
+  bucket = "${var.aws_bucket_prefix}${var.dcos_cluster_name}-bucket"
   acl    = "private"
   force_destroy = "true"
 
   tags {
-   Name = "${data.template_file.cluster-name.rendered}-bucket"
-   cluster = "${data.template_file.cluster-name.rendered}"
+   Name = "${var.aws_bucket_prefix}${var.dcos_cluster_name}-bucket"
+   cluster = "${var.dcos_cluster_name}"
+   ile-test-project = "${var.dcos_cluster_name}"
   }
-}
-
-# Create an internet gateway to give our subnet access to the outside world
-resource "aws_internet_gateway" "default" {
-  vpc_id = "${aws_vpc.default.id}"
-}
-
-# Grant the VPC internet access on its main route table
-resource "aws_route" "internet_access" {
-  route_table_id         = "${aws_vpc.default.main_route_table_id}"
-  destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = "${aws_internet_gateway.default.id}"
-}
-
-# Create a subnet to launch public nodes into
-resource "aws_subnet" "public" {
-  vpc_id                  = "${aws_vpc.default.id}"
-  cidr_block              = "10.0.0.0/22"
-  map_public_ip_on_launch = true
-}
-
-# Create a subnet to launch slave private node into
-resource "aws_subnet" "private" {
-  vpc_id                  = "${aws_vpc.default.id}"
-  cidr_block              = "10.0.4.0/22"
-  map_public_ip_on_launch = true
 }
 
 # A security group that allows all port access to internal vpc
 resource "aws_security_group" "any_access_internal" {
-  name        = "cluster-security-group"
-  description = "Manage all ports cluster level"
-  vpc_id      = "${aws_vpc.default.id}"
+  name        = "${var.dcos_cluster_name}-cluster-security-group"
+  description = "Manage all ${var.dcos_cluster_name} cluster ports"
+  vpc_id      = "${var.aws_vpc_id}"
 
  # full access internally
  ingress {
   from_port = 0
   to_port = 0
   protocol = "-1"
-  cidr_blocks = ["${aws_vpc.default.cidr_block}"]
+  self = true
   }
 
  # full access internally
@@ -95,22 +59,22 @@ resource "aws_security_group" "any_access_internal" {
   from_port = 0
   to_port = 0
   protocol = "-1"
-  cidr_blocks = ["${aws_vpc.default.cidr_block}"]
+  self = true
   }
 }
 
 # A security group for the ELB so it is accessible via the web
 resource "aws_security_group" "elb" {
-  name        = "elb-security-group"
-  description = "A security group for the elb"
-  vpc_id      = "${aws_vpc.default.id}"
+  name        = "${var.dcos_cluster_name}-elb-security-group"
+  description = ""{var.dcos_cluster_name} security group for the elb"
+  vpc_id      = "${var.aws_vpc_id}"
 
   # http access from anywhere
   ingress {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    security_groups = ["${aws_security_group.private_slave.id}"]
   }
 
   # outbound internet access
@@ -124,16 +88,16 @@ resource "aws_security_group" "elb" {
 
 # A security group for Admins to control access
 resource "aws_security_group" "admin" {
-  name        = "admin-security-group"
-  description = "Administrators can manage their machines"
-  vpc_id      = "${aws_vpc.default.id}"
+  name        = "${var.dcos_cluster_name}-admin-security-group"
+  description = "${var.dcos_cluster_name} Administrators can manage their machines"
+  vpc_id      = "${var.aws_vpc_id}"
 
   # SSH access from anywhere
   ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["${var.admin_cidr}"]
+    cidr_blocks = ["${var.admin_ssh_cidr}"]
   }
 
   # http access from anywhere
@@ -164,16 +128,16 @@ resource "aws_security_group" "admin" {
 # A security group for the ELB so it is accessible via the web
 # with some master ports for internal access only
 resource "aws_security_group" "master" {
-  name        = "master-security-group"
-  description = "Security group for masters"
-  vpc_id      = "${aws_vpc.default.id}"
+  name        = "${var.dcos_cluster_name}-master-security-group"
+  description = "${var.dcos_cluster_name} Security group for masters"
+  vpc_id      = "${var.aws_vpc_id}"
 
  # Mesos Master access from within the vpc
  ingress {
    to_port = 5050
    from_port = 5050
    protocol = "tcp"
-   cidr_blocks = ["${aws_vpc.default.cidr_block}"]
+   self = true
  }
 
  # Adminrouter access from within the vpc
@@ -181,15 +145,7 @@ resource "aws_security_group" "master" {
    to_port = 80
    from_port = 80
    protocol = "tcp"
-   cidr_blocks = ["${var.admin_cidr}"]
- }
-
- # Adminrouter SSL access from anywhere
- ingress {
-   to_port = 443
-   from_port = 443
-   protocol = "tcp"
-   cidr_blocks = ["${var.admin_cidr}"]
+   self = true
  }
 
  # Marathon access from within the vpc
@@ -197,7 +153,7 @@ resource "aws_security_group" "master" {
    to_port = 8080
    from_port = 8080
    protocol = "tcp"
-   cidr_blocks = ["${aws_vpc.default.cidr_block}"]
+   security_groups = ["${aws_security_group.any_access_internal.id}"]
  }
 
  # Exhibitor access from within the vpc
@@ -205,7 +161,7 @@ resource "aws_security_group" "master" {
    to_port = 8181
    from_port = 8181
    protocol = "tcp"
-   cidr_blocks = ["${aws_vpc.default.cidr_block}"]
+   security_groups = ["${aws_security_group.any_access_internal.id}"]
  }
 
  # Zookeeper Access from within the vpc
@@ -213,7 +169,7 @@ resource "aws_security_group" "master" {
    to_port = 2181
    from_port = 2181
    protocol = "tcp"
-   cidr_blocks = ["${aws_vpc.default.cidr_block}"]
+   security_groups = ["${aws_security_group.any_access_internal.id}"]
  }
 
  # outbound internet access
@@ -227,9 +183,9 @@ resource "aws_security_group" "master" {
 
 # A security group for public slave so it is accessible via the web
 resource "aws_security_group" "public_slave" {
-  name        = "public-slave-security-group"
-  description = "security group for slave public"
-  vpc_id      = "${aws_vpc.default.id}"
+  name        = "${var.dcos_cluster_name}-public-slave-security-group"
+  description = "${var.dcos_cluster_name} security group for slave public"
+  vpc_id      = "${var.aws_vpc_id}"
 
   # Allow ports within range
   ingress {
@@ -241,42 +197,18 @@ resource "aws_security_group" "public_slave" {
 
   # Allow ports within range
   ingress {
-    to_port = 5050
-    from_port = 23
+    from_port = 
+    to_port = 
     protocol = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Allow ports within range
+  # full access internally
   ingress {
-    to_port = 32000
-    from_port = 5052
-    protocol = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Allow ports within range
-  ingress {
-    to_port = 21
+    to_port = 0
     from_port = 0
-    protocol = "udp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Allow ports within range
-  ingress {
-    to_port = 5050
-    from_port = 23
-    protocol = "udp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Allow ports within range
-  ingress {
-    to_port = 32000
-    from_port = 5052
-    protocol = "udp"
-    cidr_blocks = ["0.0.0.0/0"]
+    protocol = "-1"
+    self = true
   }
 
   # outbound internet access
@@ -286,37 +218,29 @@ resource "aws_security_group" "public_slave" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-
-  tags {
-    KubernetesCluster = "${var.kubernetes_cluster}"
-  }
 }
 
 # A security group for private slave so it is accessible internally
 resource "aws_security_group" "private_slave" {
-  name        = "private-slave-security-group"
-  description = "security group for slave private"
-  vpc_id      = "${aws_vpc.default.id}"
+  name        = "${var.dcos_cluster_name}-private-slave-security-group"
+  description = "${var.dcos_cluster_name} security group for slave private"
+  vpc_id      = "${var.aws_vpc_id}"
 
   # full access internally
   ingress {
    from_port = 0
    to_port = 0
    protocol = "-1"
-   cidr_blocks = ["${aws_vpc.default.cidr_block}"]
+   self = true
    }
 
-  # full access internally
+  # outbound internet access
   egress {
    from_port = 0
    to_port = 0
    protocol = "-1"
-   cidr_blocks = ["${aws_vpc.default.cidr_block}"]
+   cidr_blocks = ["0.0.0.0/0"]
    }
-
-  tags {
-    KubernetesCluster = "${var.kubernetes_cluster}"
-  }
 }
 
 # Provide tested AMI and user from listed region startup commands

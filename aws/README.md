@@ -1,6 +1,18 @@
-&#x1F4D9; **Disclaimer: Community supported repository. Not supported by Mesosphere directly.**
+# AIS C2S deployment
 
-# Open DC/OS on AWS with Terraform
+# To manipulate the cluster launch the deploy.sh script as follows 
+
+```
+./deploy.sh your-private-key.pem
+```
+
+the your-private-key.pem file must contain your unencrypted PKI private key. PLEASE protect this with appropriate file system permissions ('chmod 600'). you also must have the ssh key for yor instances available under '~/.ssh/mykey/pem'.
+
+_warning_: you are not going to get prompted once you run the deploy script. It will plan the updates and apply them in one pass. Be sure you've made your updates to 'profile' file correctly prior to execution.
+
+Details of the Terraform state storage can me found in the s3-backend file.
+
+
 
 ## Getting Started
 

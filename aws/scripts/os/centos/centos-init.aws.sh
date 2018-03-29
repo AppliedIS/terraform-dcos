@@ -1,35 +1,43 @@
-sudo setenforce 0 && \
-sudo sed -i --follow-symlinks 's/^SELINUX=.*/SELINUX=disabled/g' /etc/sysconfig/selinux
-sudo tee /etc/yum.repos.d/docker.repo <<-'EOF'
-[dockerrepo]
-name=Docker Repository
-baseurl=https://yum.dockerproject.org/repo/main/centos/7
-enabled=1
-gpgcheck=1
-gpgkey=https://yum.dockerproject.org/gpg
+SCRIPT_URL=scale-rle-shared
+
+#run common scripts
+sudo yum install -y curl puppet wget xz unzip ipset ntp
+curl -L -k ${SCRIPT_URL}/ca-trust.sh | sudo bash
+
+#disable firewall, grow disk and disable SeLinux
+curl -L ${SCRIPT_URL}/firewall.sh | sudo bash
+curl -L ${SCRIPT_URL}/increaseDisk.sh | sudo bash
+curl -L ${SCRIPT_URL}/selinux.sh | sudo bash
+curl -L ${SCRIPT_URL}/docker-17.sh | sudo bash
+
+#install AWS CLI
+curl -L ${SCRIPT_URL}/pip.sh | sudo bash
+curl -L ${SCRIPT_URL}/awscli.sh | sudo bash
+
+#kevin commands - root trusts, awscli and C2S endpoints must be set first for this to work
+curl -L ${SCRIPT_URL}/vatcloud.sh | sudo bash
+
+#install goofys
+curl -L ${SCRIPT_URL}/goofys.sh | sudo bash
+
+#setup NTP
+sudo tee /etc/ntp.conf <<-'EOF'
+
 EOF
-# sudo yum -y update --exclude="docker-engine*"
-sudo mkdir -p /etc/systemd/system/docker.service.d
-sudo tee /etc/systemd/system/docker.service.d/override.conf <<- EOF
-[Service]
-Restart=always
-StartLimitInterval=0
-RestartSec=15
-ExecStartPre=-/sbin/ip link del docker0
-ExecStart=
-ExecStart=/usr/bin/docker daemon --storage-driver=overlay -H fd://
-EOF
-sudo yum install -y docker-engine-1.11.2
-sudo systemctl start docker
-sudo systemctl enable docker
-sudo yum install -y wget
-sudo yum install -y git
-sudo yum install -y unzip
-sudo yum install -y curl
-sudo yum install -y xz
-sudo yum install -y ipset
-sudo yum install -y ntp
 sudo systemctl enable ntpd
-sudo systemctl start ntpd
-sudo getent group nogroup || sudo groupadd nogroup
-sudo touch /opt/dcos-prereqs.installed
+sudo systemctl restart ntpd
+
+# Setup for scale /DCOS
+sudo useradd -u 7498 -g 100 scale
+sudo wget -q <docker-creds.zip location> -O /root/docker-creds.zip #TODO
+sudo unzip /root/docker-creds.zip -d root
+
+#create required DCOS group
+sudo groupadd <group> #TODO
+
+#allow exec on /tmp
+sudo sed -i '/tmp/ s/noexec/exec' /etc/fstab
+
+#enable IPv4 IP forwarding
+sudo sed -i '/net.ipv4.ip_forward/ s/0/1/' /etc/sysctl.conf
+sudo sysctl -p

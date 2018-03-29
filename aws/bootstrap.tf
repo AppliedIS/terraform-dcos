@@ -7,19 +7,28 @@ resource "aws_instance" "bootstrap" {
     user = "${module.aws-tested-oses.user}"
 
     # The connection will use the local SSH agent for authentication.
+  host = "${var.bastion_host == "" ? self.public_ip : self.private_ip }"
+  
+  #the connection will use the local ssh agent for authentication.
+  bastion_host = "${var.bastion_host}"
+  bastion_user = "${var.bastion_user}"
+  bastion_private_key = "${file(var.bastion_private_key)}"
   }
 
   root_block_device {
-    volume_size = "${var.aws_bootstrap_instance_disk_size}"
+    volume_size = "${var.instance_disk_size}"
+    volume_type = "gp2"
   }
 
   instance_type = "${var.aws_bootstrap_instance_type}"
 
   tags {
+  #TODO: Add chargeback via appropriate charge code
    owner = "${coalesce(var.owner, data.external.whoami.result["owner"])}"
    expiration = "${var.expiration}"
-   Name = "${data.template_file.cluster-name.rendered}-bootstrap"
-   cluster = "${data.template_file.cluster-name.rendered}"
+   Name = "${var.dcos_cluster_name}-bootstrap"
+   cluster = "${var.dcos_cluster_name}"
+   ile-test-project = "${var.dcos_cluster_name}"
   }
 
   # Lookup the correct AMI based on the region
@@ -27,50 +36,53 @@ resource "aws_instance" "bootstrap" {
   ami = "${module.aws-tested-oses.aws_ami}"
 
   # The name of our SSH keypair we created above.
-  key_name = "${var.ssh_key_name}"
+  key_name = "${var.key_name}"
 
+  #ensure we are starting with default username 
+  user_data = "${file("user-data.yaml")}"
+  
   # Our Security group to allow http and SSH access
   vpc_security_group_ids = ["${aws_security_group.any_access_internal.id}","${aws_security_group.admin.id}"]
 
   # We're going to launch into the same subnet as our ELB. In a production
   # environment it's more common to have a separate private subnet for
   # backend instances.
-  subnet_id = "${aws_subnet.public.id}"
+  subnet_id = "${var.aws_public_subnet_id}"
 
   # DCOS ip detect script
   provisioner "file" {
    source = "${var.ip-detect["aws"]}"
-   destination = "/tmp/ip-detect"
+   destination = "${var.script_location}/ip-detect"
    }
 
   # OS init script
   provisioner "file" {
    content = "${module.aws-tested-oses.os-setup}"
-   destination = "/tmp/os-setup.sh"
+   destination = "${var.script_location}/os-setup.sh"
    }
 
- # We run a remote provisioner on the instance after creating it.
-  # In this case, we just install nginx and start it. By default,
-  # this should be on port 80
-    provisioner "remote-exec" {
+  provisioner "remote-exec" {
     inline = [
-      "sudo chmod +x /tmp/os-setup.sh",
-      "sudo bash /tmp/os-setup.sh",
+      "echo Beginning inline execution...",
+      "sudo bash ${var.script_location}/os-setup.sh",
     ]
+    
+    connection {
+      script_path = "${var.script_location}/exec-os-setup.sh"
+    }
   }
 
   lifecycle {
-    ignore_changes = ["tags.Name"]
+    ignore_changes = ["tags", "ami"]
   }
 }
 
 
 # Create DCOS Mesos Master Scripts to execute
   module "dcos-bootstrap" {
-    source = "github.com/dcos/tf_dcos_core"
+    source = "./modules/tf_dcos_core"
     bootstrap_private_ip = "${aws_instance.bootstrap.private_ip}"
-    # Only allow upgrade and install as installation mode
-    dcos_install_mode = "${var.state == "upgrade" ? "upgrade" : "install"}"
+    dcos_install_mode = "${var.state}"
     dcos_version = "${var.dcos_version}"
     role = "dcos-bootstrap"
     dcos_bootstrap_port = "${var.custom_dcos_bootstrap_port}"
@@ -95,7 +107,7 @@ resource "aws_instance" "bootstrap" {
     dcos_cluster_docker_credentials_dcos_owned = "${var.dcos_cluster_docker_credentials_dcos_owned}"
     dcos_cluster_docker_credentials_enabled = "${var.dcos_cluster_docker_credentials_enabled}"
     dcos_cluster_docker_credentials_write_to_etc = "${var.dcos_cluster_docker_credentials_write_to_etc}"
-    dcos_cluster_name  = "${coalesce(var.dcos_cluster_name, data.template_file.cluster-name.rendered)}"
+    dcos_cluster_name  = "${var.dcos_cluster_name}"
     dcos_customer_key = "${var.dcos_customer_key}"
     dcos_dns_search = "${var.dcos_dns_search}"
     dcos_docker_remove_delay = "${var.dcos_docker_remove_delay}"
@@ -108,10 +120,10 @@ resource "aws_instance" "bootstrap" {
     dcos_exhibitor_zk_hosts = "${var.dcos_exhibitor_zk_hosts}"
     dcos_exhibitor_zk_path = "${var.dcos_exhibitor_zk_path}"
     dcos_gc_delay = "${var.dcos_gc_delay}"
+    dcos_gpus_are_scarce = "{var.dcos_gpus_are_scarce}"
     dcos_http_proxy = "${var.dcos_http_proxy}"
     dcos_https_proxy = "${var.dcos_https_proxy}"
     dcos_log_directory = "${var.dcos_log_directory}"
-    dcos_master_external_loadbalancer = "${coalesce(var.dcos_master_external_loadbalancer, aws_elb.public-master-elb.dns_name)}"
     dcos_master_discovery = "${var.dcos_master_discovery}"
     dcos_master_dns_bindall = "${var.dcos_master_dns_bindall}"
     # TODO(bernadinm) Terraform Bug: 9488.  Templates will not accept list, but only strings.
@@ -148,11 +160,11 @@ resource "aws_instance" "bootstrap" {
     dcos_enable_docker_gc = "${var.dcos_enable_docker_gc}"
     dcos_staged_package_storage_uri = "${var.dcos_staged_package_storage_uri}"
     dcos_package_storage_uri = "${var.dcos_package_storage_uri}"
+    nginx_image = "${var.nginx_image}"
+    script_location = "${var.script_location}"
  }
 
 resource "null_resource" "bootstrap" {
-  # If state is set to none do not install DC/OS
-  count = "${var.state == "none" ? 0 : 1}"
   # Changes to any instance of the cluster requires re-provisioning
   triggers {
     cluster_instance_ids = "${aws_instance.bootstrap.id}"
@@ -176,7 +188,6 @@ resource "null_resource" "bootstrap" {
     dcos_cluster_docker_credentials_dcos_owned = "${var.dcos_cluster_docker_credentials_dcos_owned}"
     dcos_cluster_docker_credentials_enabled = "${var.dcos_cluster_docker_credentials_enabled}"
     dcos_cluster_docker_credentials_write_to_etc = "${var.dcos_cluster_docker_credentials_write_to_etc}"
-    dcos_cluster_name  = "${coalesce(var.dcos_cluster_name, data.template_file.cluster-name.rendered)}"
     dcos_customer_key = "${var.dcos_customer_key}"
     dcos_dns_search = "${var.dcos_dns_search}"
     dcos_docker_remove_delay = "${var.dcos_docker_remove_delay}"
@@ -189,10 +200,10 @@ resource "null_resource" "bootstrap" {
     dcos_exhibitor_zk_hosts = "${var.dcos_exhibitor_zk_hosts}"
     dcos_exhibitor_zk_path = "${var.dcos_exhibitor_zk_path}"
     dcos_gc_delay = "${var.dcos_gc_delay}"
+    dcos_gpus_are_scarce = "${var.dcos_gpus_are_scarce}"
     dcos_http_proxy = "${var.dcos_http_proxy}"
     dcos_https_proxy = "${var.dcos_https_proxy}"
     dcos_log_directory = "${var.dcos_log_directory}"
-    dcos_master_external_loadbalancer = "${coalesce(var.dcos_master_external_loadbalancer, aws_elb.public-master-elb.dns_name)}"
     dcos_master_discovery = "${var.dcos_master_discovery}"
     dcos_master_dns_bindall = "${var.dcos_master_dns_bindall}"
     # TODO(bernadinm) Terraform Bug: 9488.  Templates will not accept list, but only strings.
@@ -227,31 +238,39 @@ resource "null_resource" "bootstrap" {
     dcos_enable_docker_gc = "${var.dcos_enable_docker_gc}"
     dcos_staged_package_storage_uri = "${var.dcos_staged_package_storage_uri}"
     dcos_package_storage_uri = "${var.dcos_package_storage_uri}"
+    nginx_image = "${var.nginx_image}"
+    script_location = "${var.script_location}"
   }
 
   # Bootstrap script can run on any instance of the cluster
   # So we just choose the first in this case
   connection {
-    host = "${element(aws_instance.bootstrap.*.public_ip, 0)}"
     user = "${module.aws-tested-oses.user}"
+    
+    host = "${var.bastion_host == "" ? element(aws_instance.bootstrap.*.public_ip, 0) : element(aws_instance.bootstrap.*,private_ip, 0)}"
+    
+    # the connection will use the local ssh agent for authentication.
+    bastion_host = "${var.bastion_host}"
+    bastion_user = "${var.bastion_user}"
+    bastion_private_key = "${var.bastion_private_key}"
   }
 
   # Generate and upload bootstrap script to node
   provisioner "file" {
     content     = "${module.dcos-bootstrap.script}"
-    destination = "run.sh"
+    destination = "${var.script_location}/run.sh"
   }
 
   # Install Bootstrap Script
   provisioner "remote-exec" {
     inline = [
-      "sudo chmod +x run.sh",
-      "sudo ./run.sh",
+      "sudo chmod +x ${var.script_location}run.sh",
+      "sudo "${var.script_location}/run.sh",
     ]
-  }
-
-  lifecycle {
-    ignore_changes = ["data.template_file.cluster-name.rendered"]
+  
+connection {
+   script_path = "${var.script_location}/exec-run.sh"
+    }
   }
 }
 

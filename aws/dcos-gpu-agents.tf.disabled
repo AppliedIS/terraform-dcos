@@ -7,11 +7,11 @@
 # variables are managed by this sinlge file for ease of integration. 
 
 variable "num_of_gpu_agents" {
-  default = "1"
+  default = "0"
 }
 
 variable "aws_gpu_agent_instance_type" {
-  default = "g2.2xlarge"
+  default = "p2.xlarge"
 }
 
 # AMI Zone US-WEST-2
@@ -25,13 +25,19 @@ resource "aws_instance" "gpu-agent" {
   # communicate with the resource (instance)
   connection {
     # The default username for our AMI
-    user = "centos"
+    user = "${module.aws-tested-oses.user}"
 
+    host = "${var.bastion_host == "" ? self.public_ip : self.private_ip }"
+    
     # The connection will use the local SSH agent for authentication.
+    bastion_host = "${var.bastion_host}"
+    bastion_user = "${var.bastion_user}"
+    bastion_private_key = "${file(var.bastion_private_key)}"
   }
 
   root_block_device {
     volume_size = "${var.instance_disk_size}"
+    volume_type = "gp2"
   }
 
   count = "${var.num_of_gpu_agents}"
@@ -40,51 +46,73 @@ resource "aws_instance" "gpu-agent" {
   ebs_optimized = "true"
 
   tags {
+  #TODO: Add chargeback via appropriate charge code
    owner = "${coalesce(var.owner, data.external.whoami.result["owner"])}"
    expiration = "${var.expiration}"
-   Name =  "${data.template_file.cluster-name.rendered}-gpuagt-${count.index + 1}"
-   cluster = "${data.template_file.cluster-name.rendered}"
+   Name =  "${var.dcos_cluster_name}-gpuagt-${count.index + 1}"
+   cluster = "${var.dcos_cluster_name}"
+   ile-test-project = "${var.dcos_cluster_name}"
   }
   # Lookup the correct AMI based on the region
   # we specified
   ami = "${var.aws_gpu_ami}"      
 
   # The name of our SSH keypair we created above.
-  ssh_key_name = "${var.ssh_key_name}"
+  key_name = "${var.key_name}"
 
+  #ensure we are starting with default username
+  user_data = "${file("user-data.yaml")}"
+  
   # Our Security group to allow http and SSH access
   vpc_security_group_ids = ["${aws_security_group.private_slave.id}","${aws_security_group.admin.id}","${aws_security_group.any_access_internal.id}"]
 
+  #optional IAM role to apply to instances 
+  iam_instance_profile = "${var.aws_agent_iam_role}"
+  
   # We're going to launch into the same subnet as our ELB. In a production
   # environment it's more common to have a separate private subnet for
   # backend instances.
-  subnet_id = "${aws_subnet.private.id}"
+  subnet_id = "${var.aws_private_subnet_id}"
 
   # OS init script
   provisioner "file" {
-   source = "modules/dcos-tested-aws-oses/platform/cloud/aws/centos_7.2/setup.sh"
-   destination = "/tmp/os-setup.sh"
+   content = "${module.aws-tested-oses.os-setup}"
+   destination = "${var.script_location}/os-setup.sh"
    }
 
- # We run a remote provisioner on the instance after creating it.
-  # In this case, we just install nginx and start it. By default,
-  # this should be on port 80
-    provisioner "remote-exec" {
+  provisioner "remote-exec" {
     inline = [
-      "sudo chmod +x /tmp/os-setup.sh",
-      "sudo bash /tmp/os-setup.sh",
+      "echo beginning inline execution...",
+      "sudo bash ${var.script_location}/os-setup.sh",
     ]
+    
+    connection {
+    script_path = "${var.script_location}/exec-os-setup.sh"
+    }
   }
 
+  #on destroy agent removal script
+  provisioner "remote-exec" {
+    when = "destroy"
+    inline = [
+      "sudo systemctl disable dcos-mesos-slave",
+      "sudo systemctl kill -s SIGUSR1 dcos-mesos-slave",
+      ]
+      
+    connection {
+      script_path = "${var.script_location}/graceful-agent-remove.sh"
+    }
+  }
+    
   lifecycle {
-    ignore_changes = ["tags.Name"]
+    ignore_changes = ["tags"]
   }
 }
 
 
 # Create DCOS Mesos Agent Scripts to execute
 module "dcos-mesos-gpu-agent" {
-  source               = "github.com/dcos/tf_dcos_core"
+  source               = "./modules/tf_dcos_core"
   bootstrap_private_ip = "${aws_instance.bootstrap.private_ip}"
   dcos_install_mode    = "${var.state}"
   dcos_version         = "${var.dcos_version}"
@@ -97,40 +125,65 @@ resource "null_resource" "gpu-agent" {
   # Changes to any instance of the cluster requires re-provisioning
   triggers {
     cluster_instance_ids = "${null_resource.bootstrap.id}"
+    current_ec2_instance_id = "${aws_instance.gpu-agent.*.id[count.index]}"
   }
 
   # Bootstrap script can run on any instance of the cluster
   # So we just choose the first in this case
   connection {
-    host = "${element(aws_instance.gpu-agent.*.public_ip, count.index)}"
-    user = "centos"
+    user = "${module.aws-tested-oses.user}"
+    
+    host = "${var.bastion_host == "" ? element(aws_instance.gpu-agent.*.public_ip, count.index) : element(aws_instance.gpu-agent.*.private_ip, count.index)}"
+    
+    #the connection will use the local SSH agent for authentication.
+    bastion_host = "${var.bastion_host}"
+    bastion_user = "${var.bastion_user}"
+    bastion_private_key = "${file(var.bastion_private_key)}"
   }
 
   count = "${var.num_of_gpu_agents}"
 
-  # Generate and upload Agent script to node
-  provisioner "file" {
-    content     = "${module.dcos-mesos-agent.script}"
-    destination = "run.sh"
-  }
-
-  # Wait for bootstrapnode to be ready
+  # wait for bootstrap node to be ready
   provisioner "remote-exec" {
     inline = [
      "until $(curl --output /dev/null --silent --head --fail http://${aws_instance.bootstrap.private_ip}/dcos_install.sh); do printf 'waiting for bootstrap node to serve...'; sleep 20; done"
     ]
+  
+    connection {
+      script_path = "${var.script_location}/exec-dcos-install.sh"
+      }
+    }
+    
+  #Generate and upload slave script to node
+  provisioner "file" {
+    content     = "${module.dcos-mesos-agent.script}"
+    destination = "${var.script_location}/run.sh"
   }
 
-  # Install Slave Node
+  # install slave script
   provisioner "remote-exec" {
     inline = [
-      "sudo chmod +x run.sh",
-      "sudo ./run.sh",
+     "sudo chmod +x ${var.script_location}/run.sh"
+     "sudo ${var.script_location}/run.sh"
     ]
+    
+    connection {
+      script_path = "${var.script_location}/exec-run.sh"
+    }
+  }
+
+  # Shim for GPU use in Scale
+  provisioner "remote-exec" {
+    inline = [
+      "echo 'MESOS_DOCKER=nvidia-docker' | sudo tee -a /opt/mesosphere/etc/mesos-slave-common",
+    ]
+    
+    connection {
+      script_path = "${var.script_location}/exec-mesos-gpu-shim.sh"
+    }
   }
 }
 
 output "GPU Private Public IP Address" {
   value = ["${aws_instance.gpu-agent.*.public_ip}"]
 }
-

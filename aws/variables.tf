@@ -1,6 +1,36 @@
-variable "ssh_key_name" {
-  description = "ssh key name associated with your instances for login"
+variable "aws_vpc_id" {
+  description = "key name associated with your instances for login"
   default = "default"
+}
+
+variable "aws_vps_id" {
+  description = "ID of the pre-existing VPC to launch instances into"
+  default = ""
+}
+
+variable "aws_private_subnet_id" {
+  description = "ID of the pre-existing subnet to launch private instances into"
+  default = ""
+}
+
+variable "aws_public_subnet_id" {
+  description = "ID of the pre-existing subnet to launch public instances into"
+  default = ""
+}
+
+variable "aws_master_iam_role" {
+  description = "pre-existing IAM role to be applied to cluster masters"
+  default = ""
+}
+
+variable "aws_agent_iam_role" {
+  description = "pre-existing IAM role to be applied to cluster agent nodes"
+  default = ""
+}
+
+variable "aws_bucket_prefix" {
+  description = "bucket prefix to facilitate IAM role"
+  default = ""
 }
 
 variable "user" {
@@ -23,6 +53,12 @@ variable "admin_cidr" {
   default     = "0.0.0.0/0"
 }
 
+variable "admin_ssh_cidr" {
+  description = "inbound Master SSH Access"
+  default     = "0.0.0.0/0
+}
+
+
 variable "os" {
   default = "coreos_1235.9.0"
   description = "Recommended DC/OS OSs are centos_7.2, coreos_1235.9.0, coreos_835.13.0"
@@ -30,42 +66,22 @@ variable "os" {
 
 variable "aws_master_instance_type" {
   description = "AWS DC/OS master instance type"
-  default = "m3.xlarge"
-}
-
-variable "aws_master_instance_disk_size" {
-  description = "AWS DC/OS Master instance type default size of the root disk (GB)"
-  default = "60"
+  default = "m4.xlarge"
 }
 
 variable "aws_agent_instance_type" {
   description = "AWS DC/OS Private Agent instance type"
-  default = "m3.xlarge"
-}
-
-variable "aws_agent_instance_disk_size" {
-  description = "AWS DC/OS Private Agent instance type default size of the root disk (GB)"
-  default = "60"
+  default = "m4.xlarge"
 }
 
 variable "aws_public_agent_instance_type" {
   description = "AWS DC/OS Public instance type"
-  default = "m3.xlarge"
-}
-
-variable "aws_public_agent_instance_disk_size" {
-  description = "AWS DC/OS Public instance type default size of the root disk (GB)"
-  default = "60"
+  default = "m4.xlarge"
 }
 
 variable "aws_bootstrap_instance_type" {
   description = "AWS DC/OS Bootstrap instance type"
-  default = "m3.large"
-}
-
-variable "aws_bootstrap_instance_disk_size" {
-  description = "AWS DC/OS bootstrap instance type default size of the root disk (GB)"
-  default = "60"
+  default = "t2.medium"
 }
 
 variable "num_of_private_agents" {
@@ -112,9 +128,19 @@ variable "os-init-script" {
  }
 }
 
+varialbe "script_location" {
+  description = "Location with exec permissions to support init script execution"
+  default = "/tmp"
+}
+
 variable "instance_disk_size" {
  description = "Default size of the root disk (GB)"
  default = "128"
+}
+
+variable "nginx_image" {
+  default = ""
+  description = "Nginx image to customize location"
 }
 
 variable "custom_dcos_bootstrap_port" {
@@ -133,8 +159,9 @@ variable "dcos_security" {
 }
 
 variable "dcos_resolvers" {
- default = [ "169.254.169.253" ]
- description = "DNS Resolver for internal name resolution. Points to Amazon DNS server which can resolve external addresses."
+ type = "list"
+ default = [ ]
+ description = "DNS Resolver for internal name resolution."
 }
 
 variable "dcos_oauth_enabled" {
@@ -142,13 +169,8 @@ variable "dcos_oauth_enabled" {
  description = "DC/OS Open Flag for Open Auth"
 }
 
-variable "dcos_master_external_loadbalancer" {
- default = ""
- description = "Used to allow DC/OS to set any required certs. Used for DC/OS EE."
-}
-
 variable "dcos_master_discovery" {
- default = "master_http_loadbalancer"
+ default = "static"
  description = "Ability to use an ELB or a static list for master descovery"
 }
 
@@ -183,7 +205,7 @@ variable "dcos_aws_template_storage_secret_access_key" {
 }
 
 variable "dcos_exhibitor_storage_backend" {
- default = "aws_s3"
+ default = "static"
  description = "specify an external storage system (static, zookeeper, azure, and aws_s3)"
 }
 
@@ -213,7 +235,7 @@ variable "dcos_aws_secret_access_key" {
 }
 
 variable "dcos_exhibitor_explicit_keys" {
- default = "false"
+ default = ""
  description = "This parameter specifies whether you are using AWS API keys to grant Exhibitor access to S3."
 }
 
@@ -288,7 +310,7 @@ variable "dcos_superuser_password_hash" {
 }
 
 variable "dcos_cluster_name" {
- default = ""
+ default = "OVVERIDE_ME"
  description = "Name of the DC/OS Cluster"
 }
 
@@ -390,6 +412,11 @@ variable "dcos_gc_delay" {
  description = "This parameter specifies the maximum amount of time to wait before cleaning up the executor directories. It is recommended that you accept the default value of 2 days."
 }
 
+variable "dcos_gpus_are_scarce" {
+ default  = ""
+ description = "This parameter inidcates whether DCOS should offer GPU resources to frameworks that dont oficially consume them."
+}
+
 variable "dcos_log_directory" {
  default = ""
  description = "This parameter specifies the path to the installer host logs from the SSH processes. By default this is set to /genconf/logs."
@@ -406,8 +433,13 @@ variable "dcos_previous_version" {
 }
 
 variable "dcos_version" {
- default = "1.10.2"
+ default = "1.10.0"
  description = "DCOS Version"
+}
+
+variable "dcos-type" {
+ default = "open"
+ description = "DCOS type, either ee or open."
 }
 
 variable "dcos_cluster_docker_credentials" {
@@ -473,7 +505,30 @@ variable "dcos_ip_detect_public_contents" {
  description = "Used for AWS to determine the public IP. DC/OS bug requires this variable instead of a file see https://jira.mesosphere.com/browse/DCOS_OSS-905 for more information."
 }
 
-variable "kubernetes_cluster" {
- default = "kubernetes-cluster"
- description = "Kubernetes cluster tag"
+
+variable "bastion_host" {
+ default = ""
+ description = "Host name to use as a jump box to deploy internal only accessible cluster"
+}
+
+variable "bastion_user" {
+ default = ""
+ description = "User for connecting to jump box to deploy internal only accessible cluster"
+}
+
+variable "bastion_private_key" {
+ default = ""
+ description = "Private key for jump box to deploy internal only accessible cluster"
+}
+
+
+# Core OS
+variable "aws_amis" {
+ type = "map"
+ default = {
+  eu-west-1 = "ami-"
+  us-east-1 = "ami-"
+  us-west-1 = "ami-"
+  us-west-2 = "ami-"
+ }
 }

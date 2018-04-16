@@ -62,6 +62,8 @@ We've provided all the sensible defaults that you would want to play around with
 
 - There is no git clone of this repo required. Terraform does this for you under the hood.
 
+_*Note:* Create a new directory before the command below as terraform will write its files within the current directory.
+
 ```bash
 terraform init -from-module github.com/dcos/terraform-dcos//aws
 terraform apply 
@@ -135,7 +137,6 @@ dcos_cluster_docker_credentials = <<EOF
     'https://index.docker.io/v1/':
       auth: Ze9ja2VyY3licmljSmVFOEJrcTY2eTV1WHhnSkVuVndjVEE=
 EOF
-gcp_ssh_pub_key_file = "INSERT_PUBLIC_KEY_PATH_HERE"
 ```
 _Note: The YAML comment is required for the DC/OS specific YAML settings._
 
@@ -241,7 +242,7 @@ terraform apply -var-file desired_cluster_profile
 
 #### Adding GPU Private Agents
 
-*NOTE: Best used with DC/OS 1.9*
+*NOTE: Best used with DC/OS 1.9 and above*
 
 As of Mesos 1.0, which now supports GPU agents, you can experiment with them immediately by simply removing `.disabled` from `dcos-gpu-agents.tf.disabled`. Once you do that, you can simply perform `terraform apply` and the agents will be deployed and configure and automatically join your mesos cluster. The default of `num_of_gpu_agents` is `1`. You can also remove GPU agents by simply adding `.disabled` and it will exit as well.
 

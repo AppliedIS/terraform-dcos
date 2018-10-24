@@ -141,8 +141,8 @@ resource "aws_instance" "master" {
   key_name = "${var.key_name}"
 
   # ensure we are starting with default user name
-  user_data = "{file("user-data.yaml")}"
-  
+  user_data = "${file("user-data.yaml")}"
+
   # Our Security group to allow http and SSH access
   vpc_security_group_ids = ["${aws_security_group.master.id}","${aws_security_group.admin.id}","${aws_security_group.any_access_internal.id}"]
 

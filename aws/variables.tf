@@ -55,7 +55,7 @@ variable "admin_cidr" {
 
 variable "admin_ssh_cidr" {
   description = "inbound Master SSH Access"
-  default     = "0.0.0.0/0
+  default     = "0.0.0.0/0"
 }
 
 

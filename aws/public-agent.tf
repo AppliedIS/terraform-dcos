@@ -82,7 +82,7 @@ resource "aws_instance" "public-agent" {
   key_name = "${var.key_name}"
 
   # ensure we are starting with default user name
-  user_data = "{file("user-data.yaml")}"
+  user_data = "${file("user-data.yaml")}"
   
   # Our Security group to allow http and SSH access
   vpc_security_group_ids = ["${aws_security_group.public_slave.id}","${aws_security_group.admin.id}","${aws_security_group.any_access_internal.id}"]
@@ -182,7 +182,7 @@ resource "null_resource" "public-agent" {
   # install slave script
   provisioner "remote-exec" {
     inline = [
-      "sudo chmod +x ${var.script_location}/run.sh"
+      "sudo chmod +x ${var.script_location}/run.sh",
       "sudo ${var.script_location}/run.sh"
     ]
     

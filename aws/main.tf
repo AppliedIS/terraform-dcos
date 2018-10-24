@@ -66,7 +66,7 @@ resource "aws_security_group" "any_access_internal" {
 # A security group for the ELB so it is accessible via the web
 resource "aws_security_group" "elb" {
   name        = "${var.dcos_cluster_name}-elb-security-group"
-  description = ""{var.dcos_cluster_name} security group for the elb"
+  description = "${var.dcos_cluster_name} security group for the elb"
   vpc_id      = "${var.aws_vpc_id}"
 
   # http access from anywhere
@@ -197,8 +197,8 @@ resource "aws_security_group" "public_slave" {
 
   # Allow ports within range
   ingress {
-    from_port = 
-    to_port = 
+    from_port = 0
+    to_port = 0
     protocol = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }

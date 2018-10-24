@@ -264,8 +264,8 @@ resource "null_resource" "bootstrap" {
   # Install Bootstrap Script
   provisioner "remote-exec" {
     inline = [
-      "sudo chmod +x ${var.script_location}run.sh",
-      "sudo "${var.script_location}/run.sh",
+      "sudo chmod +x ${var.script_location}/run.sh",
+      "sudo ${var.script_location}/run.sh",
     ]
   
 connection {
